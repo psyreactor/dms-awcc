@@ -1,0 +1,19 @@
+{
+    "id": "awcc",
+    "name": "Alienware Command Center",
+    "description": "Control thermal modes, fan boost, keyboard lighting, light bar and turbo via awcc CLI",
+    "version": "1.0.0",
+    "author": "Lucas Mariani",
+    "type": "widget",
+    "capabilities": [
+        "dankbar-widget"
+    ],
+    "component": "./AwccWidget.qml",
+    "icon": "bolt",
+    "settings": "./AwccSettings.qml",
+    "permissions": [
+        "settings_read",
+        "settings_write",
+        "process"
+    ]
+}
