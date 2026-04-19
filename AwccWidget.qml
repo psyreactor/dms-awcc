@@ -14,6 +14,8 @@ PluginComponent {
     // Settings
     property string awccBinary: pluginData.awccBinary || "awcc"
     property int refreshInterval: pluginData.refreshInterval || 10
+    // Make command IDs unique per widget instance
+    readonly property string commandNamespace: "awcc." + Math.floor(Math.random() * 1000000000)
 
     // State
     property string currentMode: "..."
@@ -72,7 +74,7 @@ PluginComponent {
     )
 
     function runAwcc(id, args, callback) {
-        Proc.runCommand("awcc." + id, [root.awccBinary].concat(args), callback, 500)
+        Proc.runCommand(root.commandNamespace + "." + id, [root.awccBinary].concat(args), callback, 500)
     }
 
     function parseDeviceInfo() {
