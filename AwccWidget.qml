@@ -1,5 +1,7 @@
 import QtQuick
 import QtQuick.Controls
+import QtQuick.Layouts
+import QtQuick.Shapes
 import Quickshell
 import qs.Common
 import qs.Services
@@ -14,11 +16,18 @@ PluginComponent {
     // Settings
     property string awccBinary: pluginData.awccBinary || "awcc"
     property int refreshInterval: pluginData.refreshInterval || 10
-    // Make command IDs unique per widget instance
-    readonly property string commandNamespace: "awcc." + Math.floor(Math.random() * 1000000000)
+    // Proc.runCommand() keeps one entry per id and resolves entry.callback at
+    // completion time, so instances sharing an id clobber each other's callback.
+    // The id has to stay stable, though: the 500ms debounce below is what
+    // collapses the burst of commands a slider drag produces, and a fresh id per
+    // call would defeat it. Keying on the screen gives isolation per instance
+    // and a bounded set of entries, where a random namespace leaked a new entry
+    // and Timer into the Proc singleton on every reload.
+    readonly property string commandNamespace: "awcc." + (root.parentScreen ? root.parentScreen.name : "default")
 
     // State
     property string currentMode: "..."
+    property string toastText: ""
     property int cpuBoost: 0
     property int gpuBoost: 0
     property bool turboEnabled: false
@@ -72,6 +81,16 @@ PluginComponent {
              ? e.devName !== ""
              : (e.devName !== "" && supportedLightingModes.indexOf(e.devName) >= 0)
     )
+
+    Timer {
+        id: toastTimer
+        interval: 1800
+    }
+
+    function showToast(msg) {
+        root.toastText = msg
+        toastTimer.restart()
+    }
 
     function runAwcc(id, args, callback) {
         Proc.runCommand(root.commandNamespace + "." + id, [root.awccBinary].concat(args), callback, 500)
@@ -185,11 +204,21 @@ PluginComponent {
         }
     }
 
+    // Wrapped in an Item that reports the icon's implicit size, matching the
+    // sibling plugins. The mode name is deliberately left out: a vertical bar is
+    // too narrow for it.
     verticalBarPill: Component {
-        DankIcon {
-            name: "bolt"
-            size: 24
-            color: Theme.primary
+        Item {
+            implicitWidth: verticalIcon.implicitWidth
+            implicitHeight: verticalIcon.implicitHeight
+
+            DankIcon {
+                id: verticalIcon
+                anchors.centerIn: parent
+                name: "bolt"
+                size: 24
+                color: Theme.primary
+            }
         }
     }
 
@@ -197,6 +226,8 @@ PluginComponent {
 
     component StyledSlider: Slider {
         id: sliderControl
+
+        property color accentColor: Theme.primary
 
         background: Rectangle {
             x: sliderControl.leftPadding
@@ -212,8 +243,8 @@ PluginComponent {
                 radius: 2
                 gradient: Gradient {
                     orientation: Gradient.Horizontal
-                    GradientStop { position: 0.0; color: Theme.primary }
-                    GradientStop { position: 1.0; color: Qt.rgba(Theme.primary.r, Theme.primary.g, Theme.primary.b, 0.5) }
+                    GradientStop { position: 0.0; color: sliderControl.accentColor }
+                    GradientStop { position: 1.0; color: Qt.rgba(sliderControl.accentColor.r, sliderControl.accentColor.g, sliderControl.accentColor.b, 0.5) }
                 }
             }
         }
@@ -221,12 +252,230 @@ PluginComponent {
         handle: Rectangle {
             x: sliderControl.leftPadding + sliderControl.visualPosition * (sliderControl.availableWidth - width)
             y: sliderControl.topPadding + sliderControl.availableHeight / 2 - height / 2
-            implicitWidth: 20
-            implicitHeight: 20
-            radius: 10
-            color: "white"
-            border.color: Theme.primary
+            implicitWidth: 18
+            implicitHeight: 18
+            radius: width / 2
+            color: Theme.surfaceContainerHighest
+            border.color: sliderControl.accentColor
             border.width: 2
+
+            scale: sliderControl.pressed ? 1.15 : (sliderControl.hovered ? 1.08 : 1.0)
+            Behavior on scale { NumberAnimation { duration: 150; easing.type: Easing.OutBack } }
+        }
+    }
+
+    // Card wrapper with an icon + title + subtitle header, matching the popouts
+    // of the sibling plugins. Section controls go in the default slot.
+    component SectionCard: StyledRect {
+        id: card
+
+        property string iconName: ""
+        property string title: ""
+        property string subtitle: ""
+        property color accentColor: Theme.primary
+        default property alias content: cardBody.data
+
+        width: parent.width
+        height: Math.max(0, cardCol.implicitHeight + Theme.spacingM * 2)
+        radius: Theme.cornerRadius
+        color: Theme.withAlpha(Theme.surfaceContainerHigh, Theme.popupTransparency)
+        border.width: 1
+        border.color: Qt.rgba(card.accentColor.r, card.accentColor.g, card.accentColor.b, 0.15)
+
+        Column {
+            id: cardCol
+            anchors.left: parent.left
+            anchors.right: parent.right
+            anchors.top: parent.top
+            anchors.margins: Theme.spacingM
+            spacing: Theme.spacingS
+
+            RowLayout {
+                width: parent.width
+                spacing: Theme.spacingXS
+
+                DankIcon {
+                    name: card.iconName
+                    size: 14
+                    color: card.accentColor
+                    Layout.alignment: Qt.AlignVCenter
+                }
+
+                StyledText {
+                    text: card.title
+                    font.pixelSize: Theme.fontSizeSmall
+                    font.weight: Font.Bold
+                    color: Theme.surfaceText
+                    Layout.alignment: Qt.AlignVCenter
+                }
+
+                StyledText {
+                    text: card.subtitle
+                    font.pixelSize: Theme.fontSizeSmall - 1
+                    color: Theme.surfaceVariantText
+                    opacity: 0.7
+                    Layout.fillWidth: true
+                    Layout.alignment: Qt.AlignVCenter
+                    elide: Text.ElideRight
+                }
+            }
+
+            Column {
+                id: cardBody
+                width: parent.width
+                spacing: Theme.spacingS
+            }
+        }
+    }
+
+    // Pick-one-of-N button, used for both thermal modes and keyboard effects.
+    // Corners round to a pill on hover, the same motion the sibling plugins give
+    // their list rows.
+    component ActionChip: Item {
+        id: chip
+
+        property string label: ""
+        property string iconName: ""
+        property bool active: false
+        property color accentColor: Theme.primary
+        signal triggered
+
+        readonly property bool isHovered: chipMa.containsMouse
+
+        Shape {
+            id: chipBg
+            anchors.fill: parent
+
+            readonly property real target: (chip.isHovered || chip.active) ? (height / 2) : (Theme.cornerRadius || 12)
+            property real r: target
+            Behavior on r { NumberAnimation { duration: 500; easing.type: Easing.OutExpo } }
+
+            ShapePath {
+                fillColor: chip.active
+                           ? Qt.rgba(chip.accentColor.r, chip.accentColor.g, chip.accentColor.b, 0.18)
+                           : (chip.isHovered
+                              ? Qt.rgba(chip.accentColor.r, chip.accentColor.g, chip.accentColor.b, 0.08)
+                              : Qt.rgba(Theme.secondary.r, Theme.secondary.g, Theme.secondary.b, 0.04))
+                strokeColor: chip.active
+                             ? Qt.rgba(chip.accentColor.r, chip.accentColor.g, chip.accentColor.b, 0.5)
+                             : (chip.isHovered
+                                ? Qt.rgba(chip.accentColor.r, chip.accentColor.g, chip.accentColor.b, 0.3)
+                                : Qt.rgba(Theme.secondary.r, Theme.secondary.g, Theme.secondary.b, 0.15))
+                strokeWidth: 1
+
+                startX: chipBg.r + 1; startY: 1
+                PathLine { x: chipBg.width - chipBg.r - 1; y: 1 }
+                PathArc { x: chipBg.width - 1; y: chipBg.r + 1; radiusX: chipBg.r; radiusY: chipBg.r; direction: PathArc.Clockwise }
+                PathLine { x: chipBg.width - 1; y: chipBg.height - chipBg.r - 1 }
+                PathArc { x: chipBg.width - chipBg.r - 1; y: chipBg.height - 1; radiusX: chipBg.r; radiusY: chipBg.r; direction: PathArc.Clockwise }
+                PathLine { x: chipBg.r + 1; y: chipBg.height - 1 }
+                PathArc { x: 1; y: chipBg.height - chipBg.r - 1; radiusX: chipBg.r; radiusY: chipBg.r; direction: PathArc.Clockwise }
+                PathLine { x: 1; y: chipBg.r + 1 }
+                PathArc { x: chipBg.r + 1; y: 1; radiusX: chipBg.r; radiusY: chipBg.r; direction: PathArc.Clockwise }
+            }
+        }
+
+        scale: chipMa.pressed ? 0.95 : 1.0
+        Behavior on scale { NumberAnimation { duration: 100 } }
+
+        Column {
+            anchors.centerIn: parent
+            spacing: 2
+
+            DankIcon {
+                name: chip.iconName
+                size: 14
+                visible: chip.iconName.length > 0
+                color: chip.active ? chip.accentColor : Theme.surfaceVariantText
+                anchors.horizontalCenter: parent.horizontalCenter
+            }
+
+            StyledText {
+                text: chip.label
+                font.pixelSize: Theme.fontSizeSmall
+                font.weight: chip.active ? Font.Bold : Font.Normal
+                color: chip.active ? chip.accentColor : Theme.surfaceText
+                width: Math.min(implicitWidth, chip.width - 8)
+                elide: Text.ElideRight
+                horizontalAlignment: Text.AlignHCenter
+                anchors.horizontalCenter: parent.horizontalCenter
+            }
+        }
+
+        DankRipple {
+            id: chipRipple
+            anchors.fill: parent
+            cornerRadius: chipBg.r
+            rippleColor: chip.accentColor
+        }
+
+        MouseArea {
+            id: chipMa
+            anchors.fill: parent
+            hoverEnabled: true
+            cursorShape: Qt.PointingHandCursor
+            onPressed: m => chipRipple.trigger(m.x, m.y)
+            onClicked: chip.triggered()
+        }
+    }
+
+    // Slider plus its label and value pill, so the three of them stay aligned
+    // across sections instead of each one recomputing widths by hand.
+    component LabeledSlider: RowLayout {
+        id: ls
+
+        property string label: ""
+        property string iconName: ""
+        property color accentColor: Theme.primary
+        property alias from: slider.from
+        property alias to: slider.to
+        property alias value: slider.value
+        signal committed(int newValue)
+
+        width: parent.width
+        spacing: Theme.spacingS
+
+        DankIcon {
+            name: ls.iconName
+            size: 18
+            color: Theme.surfaceVariantText
+            visible: ls.iconName.length > 0
+            Layout.alignment: Qt.AlignVCenter
+        }
+
+        StyledText {
+            text: ls.label
+            font.pixelSize: Theme.fontSizeSmall
+            color: Theme.surfaceVariantText
+            visible: ls.label.length > 0
+            Layout.preferredWidth: 32
+            Layout.alignment: Qt.AlignVCenter
+        }
+
+        StyledSlider {
+            id: slider
+            stepSize: 1
+            accentColor: ls.accentColor
+            Layout.fillWidth: true
+            Layout.alignment: Qt.AlignVCenter
+            onPressedChanged: if (!pressed) ls.committed(Math.round(value))
+        }
+
+        Rectangle {
+            height: 18
+            width: Math.max(42, sliderVal.implicitWidth + Theme.spacingS * 2)
+            radius: 9
+            color: Qt.rgba(ls.accentColor.r, ls.accentColor.g, ls.accentColor.b, 0.12)
+            Layout.alignment: Qt.AlignVCenter
+
+            StyledText {
+                id: sliderVal
+                anchors.centerIn: parent
+                text: Math.round(slider.value) + "%"
+                font.pixelSize: Theme.fontSizeSmall
+                font.weight: Font.Bold
+                color: ls.accentColor
+            }
         }
     }
 
@@ -393,484 +642,309 @@ PluginComponent {
     // ── Popout ─────────────────────────────────────────────────────────────────
 
     popoutContent: Component {
-        Flickable {
-            implicitWidth: root.popoutWidth
-            implicitHeight: root.popoutHeight
-            contentWidth: width
-            contentHeight: mainCol.height + Theme.spacingM * 2
-            clip: true
+        PopoutComponent {
+            headerText: ""
+            showCloseButton: false
 
+            Item {
+                width: parent.width
+                height: mainCol.implicitHeight
 
-            Column {
-                id: mainCol
-                x: Theme.spacingM
-                y: Theme.spacingM
-                width: parent.width - Theme.spacingM * 2
-                spacing: Theme.spacingM
-
-                // ── HEADER CARD ───────────────────────────────────────────────
-
-                Rectangle {
+                Column {
+                    id: mainCol
                     width: parent.width
-                    height: 56
-                    radius: Theme.cornerRadius
-                    gradient: Gradient {
-                        GradientStop { position: 0.0; color: Qt.rgba(Theme.primary.r, Theme.primary.g, Theme.primary.b, 0.15) }
-                        GradientStop { position: 1.0; color: Qt.rgba(Theme.secondary.r, Theme.secondary.g, Theme.secondary.b, 0.08) }
-                    }
-                    border.width: 1
-                    border.color: Qt.rgba(Theme.primary.r, Theme.primary.g, Theme.primary.b, 0.15)
+                    spacing: Theme.spacingM
+                    topPadding: 0
+                    bottomPadding: 2
 
-                    Row {
-                        anchors { left: parent.left; verticalCenter: parent.verticalCenter; leftMargin: Theme.spacingM }
-                        spacing: Theme.spacingM
+                    // Header card
+                    StyledRect {
+                        width: parent.width
+                        height: 72
+                        radius: Theme.cornerRadius * 1.5
+                        color: Theme.withAlpha(Theme.surfaceContainerHigh, Theme.popupTransparency)
+                        border.width: 1
+                        border.color: Qt.rgba(Theme.primary.r, Theme.primary.g, Theme.primary.b, 0.15)
 
-                        Rectangle {
-                            width: 36; height: 36; radius: 10
-                            color: Qt.rgba(Theme.primary.r, Theme.primary.g, Theme.primary.b, 0.18)
+                        Row {
+                            anchors.left: parent.left
+                            anchors.leftMargin: Theme.spacingM
+                            anchors.right: parent.right
+                            anchors.rightMargin: Theme.spacingM
                             anchors.verticalCenter: parent.verticalCenter
-                            DankIcon { name: "bolt"; size: 20; color: Theme.primary; anchors.centerIn: parent }
-                        }
+                            spacing: Theme.spacingM
 
-                        Column {
-                            anchors.verticalCenter: parent.verticalCenter
-                            spacing: 3
-                            StyledText { text: "Alienware Control"; font.pixelSize: Theme.fontSizeMedium; font.weight: Font.Bold }
                             Rectangle {
-                                height: 18
-                                width: headerModeLabel.implicitWidth + Theme.spacingS * 2
-                                radius: 9
-                                color: Qt.rgba(Theme.primary.r, Theme.primary.g, Theme.primary.b, 0.18)
-                                border.width: 1
-                                border.color: Qt.rgba(Theme.primary.r, Theme.primary.g, Theme.primary.b, 0.35)
-                                StyledText {
-                                    id: headerModeLabel
-                                    anchors.centerIn: parent
-                                    text: root.currentMode
-                                    font.pixelSize: Theme.fontSizeSmall
-                                    font.weight: Font.Bold
+                                width: 42
+                                height: 42
+                                radius: 21
+                                anchors.verticalCenter: parent.verticalCenter
+                                color: Qt.rgba(Theme.primary.r, Theme.primary.g, Theme.primary.b, 0.15)
+
+                                DankIcon {
+                                    name: "bolt"
+                                    size: 22
                                     color: Theme.primary
+                                    anchors.centerIn: parent
+                                }
+                            }
+
+                            Column {
+                                anchors.verticalCenter: parent.verticalCenter
+                                spacing: 2
+                                width: parent.width - 42 - Theme.spacingM
+
+                                StyledText {
+                                    width: parent.width
+                                    text: "Alienware Control"
+                                    font.bold: true
+                                    font.pixelSize: Theme.fontSizeLarge
+                                    color: Theme.surfaceText
+                                    elide: Text.ElideRight
+                                }
+
+                                StyledText {
+                                    width: parent.width
+                                    text: root.currentMode + (root.turboEnabled ? " • Turbo on" : "")
+                                    font.pixelSize: Theme.fontSizeSmall - 1
+                                    color: Theme.primary
+                                    opacity: 0.85
+                                    elide: Text.ElideRight
                                 }
                             }
                         }
                     }
-                }
 
-                // ── THERMAL MODE ──────────────────────────────────────────────
+                    // Thermal modes
+                    SectionCard {
+                        iconName: "bolt"
+                        title: "THERMAL MODE"
+                        subtitle: root.currentMode
+                        accentColor: Theme.primary
+                        visible: root.hasThermalModes
 
-                Column {
-                    id: thermalSection
-                    width: parent.width
-                    spacing: Theme.spacingS
-                    visible: root.hasThermalModes
+                        Column {
+                            id: modesColumn
+                            width: parent.width
+                            spacing: Theme.spacingXS
 
-                    Row {
-                        spacing: Theme.spacingS
-                        Rectangle { width: 4; height: 20; radius: 2; color: Theme.primary; anchors.verticalCenter: parent.verticalCenter }
-                        DankIcon { name: "bolt"; size: 16; color: Theme.primary; anchors.verticalCenter: parent.verticalCenter }
-                        StyledText {
-                            text: "THERMAL MODE"
-                            font.pixelSize: Theme.fontSizeSmall
-                            font.weight: Font.Bold
-                            color: Theme.surfaceText
-                            anchors.verticalCenter: parent.verticalCenter
-                        }
-                    }
+                            readonly property int buttonWidth: Math.floor((width - 3 * Theme.spacingXS) / 4)
 
-                    Column {
-                        id: modesColumn
-                        width: parent.width
-                        spacing: Theme.spacingXS
+                            Repeater {
+                                model: Math.ceil(root.thermalModes.length / 4)
 
-                        readonly property int buttonWidth: Math.floor((width - 3 * Theme.spacingXS) / 4)
+                                Row {
+                                    readonly property var rowModes: root.thermalModes.slice(index * 4, Math.min((index + 1) * 4, root.thermalModes.length))
+                                    spacing: Theme.spacingXS
+                                    anchors.horizontalCenter: parent.horizontalCenter
 
-                        Repeater {
-                            model: Math.ceil(root.thermalModes.length / 4)
+                                    Repeater {
+                                        model: rowModes
 
-                            Row {
-                                readonly property var rowModes: root.thermalModes.slice(index * 4, Math.min((index + 1) * 4, root.thermalModes.length))
-                                spacing: Theme.spacingXS
-                                anchors.horizontalCenter: parent.horizontalCenter
+                                        ActionChip {
+                                            width: modesColumn.buttonWidth
+                                            height: 50
+                                            label: modelData.label
+                                            iconName: modelData.icon
+                                            accentColor: Theme.primary
+                                            active: root.currentMode.toLowerCase() === modelData.label.toLowerCase()
 
-                                Repeater {
-                                    model: rowModes
-
-                                    Rectangle {
-                                        width: modesColumn.buttonWidth
-                                        height: 50
-                                        radius: Theme.cornerRadius
-
-                                        readonly property bool active: root.currentMode.toLowerCase() === modelData.label.toLowerCase()
-
-                                        scale: modeArea.pressed ? 0.95 : 1.0
-                                        Behavior on scale { NumberAnimation { duration: 100 } }
-
-                                        color: active ? Qt.rgba(Theme.primary.r, Theme.primary.g, Theme.primary.b, 0.18)
-                                                      : modeArea.containsMouse ? Theme.surfaceContainerHigh : Theme.surfaceContainer
-                                        border.width: active ? 1 : 0
-                                        border.color: Qt.rgba(Theme.primary.r, Theme.primary.g, Theme.primary.b, 0.4)
-
-                                        Column {
-                                            anchors.centerIn: parent
-                                            spacing: 2
-
-                                            DankIcon {
-                                                name: modelData.icon
-                                                size: 14
-                                                color: parent.parent.active ? Theme.primary : Theme.surfaceVariantText
-                                                anchors.horizontalCenter: parent.horizontalCenter
-                                            }
-
-                                            StyledText {
-                                                text: modelData.label
-                                                font.pixelSize: Theme.fontSizeSmall
-                                                color: parent.parent.active ? Theme.primary : Theme.surfaceText
-                                                font.weight: parent.parent.active ? Font.Bold : Font.Normal
-                                                elide: Text.ElideRight
-                                                width: modesColumn.buttonWidth - 8
-                                                horizontalAlignment: Text.AlignHCenter
-                                            }
-                                        }
-
-                                        MouseArea {
-                                            id: modeArea
-                                            anchors.fill: parent
-                                            hoverEnabled: true
-                                            cursorShape: Qt.PointingHandCursor
-                                            onClicked: {
-                                                var cmd = modelData.cmd
-                                                var label = modelData.label
+                                            onTriggered: {
+                                                const cmd = modelData.cmd
+                                                const label = modelData.label
                                                 root.runAwcc("setMode", [cmd], (stdout, exitCode) => {
-                                                    if (exitCode === 0) root.currentMode = label
+                                                    if (exitCode === 0) {
+                                                        root.currentMode = label
+                                                        root.showToast("Thermal mode: " + label)
+                                                    }
                                                 })
                                             }
                                         }
-
-                                        DankRipple {
-                                            anchors.fill: parent
-                                            cornerRadius: Theme.cornerRadius
-                                            rippleColor: Qt.rgba(Theme.primary.r, Theme.primary.g, Theme.primary.b, 0.2)
-                                        }
                                     }
                                 }
                             }
                         }
                     }
-                }
 
-                Rectangle {
-                    width: parent.width; height: 1
-                    color: Theme.outline; opacity: 0.3
-                    visible: root.hasThermalModes && root.hasFanBoost
-                }
+                    // Fan boost
+                    SectionCard {
+                        iconName: "wind_power"
+                        title: "FAN BOOST"
+                        subtitle: "CPU " + root.cpuBoost + "% • GPU " + root.gpuBoost + "%"
+                        accentColor: Theme.primary
+                        visible: root.hasFanBoost
 
-                // ── FAN BOOST ─────────────────────────────────────────────────
-
-                Column {
-                    width: parent.width
-                    spacing: Theme.spacingS
-                    visible: root.hasFanBoost
-
-                    Row {
-                        spacing: Theme.spacingS
-                        Rectangle { width: 4; height: 20; radius: 2; color: Theme.primary; anchors.verticalCenter: parent.verticalCenter }
-                        DankIcon { name: "wind_power"; size: 16; color: Theme.primary; anchors.verticalCenter: parent.verticalCenter }
-                        StyledText {
-                            text: "FAN BOOST"
-                            font.pixelSize: Theme.fontSizeSmall
-                            font.weight: Font.Bold
-                            color: Theme.surfaceText
-                            anchors.verticalCenter: parent.verticalCenter
-                        }
-                    }
-
-                    Row {
-                        width: parent.width
-                        spacing: Theme.spacingS
-
-                        StyledText {
-                            text: "CPU"
-                            width: 32
-                            font.pixelSize: Theme.fontSizeSmall
-                            color: Theme.surfaceVariantText
-                            anchors.verticalCenter: parent.verticalCenter
-                        }
-
-                        StyledSlider {
-                            id: cpuBoostSlider
-                            width: parent.width - 32 - 48 - Theme.spacingS * 2
-                            from: 1; to: 100; stepSize: 1
+                        LabeledSlider {
+                            label: "CPU"
+                            from: 1
+                            to: 100
                             value: root.cpuBoost
-                            anchors.verticalCenter: parent.verticalCenter
-                            onPressedChanged: {
-                                if (!pressed) {
-                                    root.cpuBoost = Math.round(value)
-                                    pluginService?.savePluginData("awcc", "cpuBoost", root.cpuBoost)
-                                    root.runAwcc("scb", ["scb", Math.round(value).toString()], () => {})
-                                }
+                            accentColor: Theme.primary
+                            onCommitted: newValue => {
+                                root.cpuBoost = newValue
+                                pluginService?.savePluginData("awcc", "cpuBoost", newValue)
+                                root.runAwcc("scb", ["scb", newValue.toString()], () => {})
                             }
                         }
 
-                        Rectangle {
-                            height: 18
-                            width: Math.max(42, cpuBoostVal.implicitWidth + Theme.spacingS * 2)
-                            radius: 9
-                            color: Qt.rgba(Theme.primary.r, Theme.primary.g, Theme.primary.b, 0.12)
-                            anchors.verticalCenter: parent.verticalCenter
-                            StyledText {
-                                id: cpuBoostVal
-                                anchors.centerIn: parent
-                                text: Math.round(cpuBoostSlider.value) + "%"
-                                font.pixelSize: Theme.fontSizeSmall
-                                font.weight: Font.Bold
-                                color: Theme.primary
-                            }
-                        }
-                    }
-
-                    Row {
-                        width: parent.width
-                        spacing: Theme.spacingS
-
-                        StyledText {
-                            text: "GPU"
-                            width: 32
-                            font.pixelSize: Theme.fontSizeSmall
-                            color: Theme.surfaceVariantText
-                            anchors.verticalCenter: parent.verticalCenter
-                        }
-
-                        StyledSlider {
-                            id: gpuBoostSlider
-                            width: parent.width - 32 - 48 - Theme.spacingS * 2
-                            from: 1; to: 100; stepSize: 1
+                        LabeledSlider {
+                            label: "GPU"
+                            from: 1
+                            to: 100
                             value: root.gpuBoost
-                            anchors.verticalCenter: parent.verticalCenter
-                            onPressedChanged: {
-                                if (!pressed) {
-                                    root.gpuBoost = Math.round(value)
-                                    pluginService?.savePluginData("awcc", "gpuBoost", root.gpuBoost)
-                                    root.runAwcc("sgb", ["sgb", Math.round(value).toString()], () => {})
-                                }
-                            }
-                        }
-
-                        Rectangle {
-                            height: 18
-                            width: Math.max(42, gpuBoostVal.implicitWidth + Theme.spacingS * 2)
-                            radius: 9
-                            color: Qt.rgba(Theme.primary.r, Theme.primary.g, Theme.primary.b, 0.12)
-                            anchors.verticalCenter: parent.verticalCenter
-                            StyledText {
-                                id: gpuBoostVal
-                                anchors.centerIn: parent
-                                text: Math.round(gpuBoostSlider.value) + "%"
-                                font.pixelSize: Theme.fontSizeSmall
-                                font.weight: Font.Bold
-                                color: Theme.primary
+                            accentColor: Theme.primary
+                            onCommitted: newValue => {
+                                root.gpuBoost = newValue
+                                pluginService?.savePluginData("awcc", "gpuBoost", newValue)
+                                root.runAwcc("sgb", ["sgb", newValue.toString()], () => {})
                             }
                         }
                     }
-                }
 
-                Rectangle {
-                    width: parent.width; height: 1
-                    color: Theme.outline; opacity: 0.3
-                    visible: root.hasFanBoost && (root.hasBrightness || root.hasLightingEffects)
-                }
+                    // Keyboard lighting
+                    SectionCard {
+                        id: kbSection
+                        iconName: "keyboard"
+                        title: "KEYBOARD"
+                        subtitle: root.hasBrightness ? (root.kbBrightness + "% brightness") : ""
+                        accentColor: Theme.secondary
+                        visible: root.hasBrightness || root.hasLightingEffects
 
-                // ── KEYBOARD LIGHTING ─────────────────────────────────────────
+                        readonly property bool needsColor: ["static", "breathe", "wave", "bkf"].indexOf(root.kbEffect) >= 0
 
-                Column {
-                    id: kbSection
-                    width: parent.width
-                    spacing: Theme.spacingS
-                    visible: root.hasBrightness || root.hasLightingEffects
-
-                    property bool needsColor: ["static", "breathe", "wave", "bkf"].indexOf(root.kbEffect) >= 0
-
-                    Row {
-                        spacing: Theme.spacingS
-                        Rectangle { width: 4; height: 20; radius: 2; color: Theme.secondary; anchors.verticalCenter: parent.verticalCenter }
-                        DankIcon { name: "keyboard"; size: 16; color: Theme.secondary; anchors.verticalCenter: parent.verticalCenter }
-                        StyledText {
-                            text: "KEYBOARD"
-                            font.pixelSize: Theme.fontSizeSmall
-                            font.weight: Font.Bold
-                            color: Theme.surfaceText
-                            anchors.verticalCenter: parent.verticalCenter
-                        }
-                    }
-
-                    Row {
-                        width: parent.width
-                        spacing: Theme.spacingS
-                        visible: root.hasBrightness
-
-                        DankIcon {
-                            name: "brightness_high"
-                            size: 18
-                            color: Theme.surfaceVariantText
-                            anchors.verticalCenter: parent.verticalCenter
-                        }
-
-                        StyledSlider {
-                            id: kbBrightnessSlider
-                            width: parent.width - 18 - 40 - Theme.spacingS * 2
-                            from: 0; to: 100; stepSize: 1
+                        LabeledSlider {
+                            iconName: "brightness_high"
+                            from: 0
+                            to: 100
                             value: root.kbBrightness
-                            anchors.verticalCenter: parent.verticalCenter
-                            onPressedChanged: {
-                                if (!pressed) {
-                                    root.kbBrightness = Math.round(value)
-                                    pluginService?.savePluginData("awcc", "kbBrightness", root.kbBrightness)
-                                    root.runAwcc("brightness", ["brightness", Math.round(value).toString()], () => {})
-                                }
+                            accentColor: Theme.secondary
+                            visible: root.hasBrightness
+                            onCommitted: newValue => {
+                                root.kbBrightness = newValue
+                                pluginService?.savePluginData("awcc", "kbBrightness", newValue)
+                                root.runAwcc("brightness", ["brightness", newValue.toString()], () => {})
                             }
                         }
 
-                        StyledText {
-                            text: Math.round(kbBrightnessSlider.value) + "%"
-                            width: 40
-                            font.pixelSize: Theme.fontSizeSmall
-                            color: Theme.surfaceText
-                            anchors.verticalCenter: parent.verticalCenter
-                        }
-                    }
+                        Flow {
+                            width: parent.width
+                            spacing: Theme.spacingXS
+                            visible: root.hasLightingEffects
 
-                    Flow {
-                        id: kbEffectsFlow
-                        width: parent.width
-                        spacing: Theme.spacingXS
-                        visible: root.hasLightingEffects
+                            Repeater {
+                                model: root.kbEffects
 
-                        Repeater {
-                            model: root.kbEffects
+                                ActionChip {
+                                    height: 28
+                                    width: Math.max(64, label.length * 8 + Theme.spacingM * 2)
+                                    label: modelData.label
+                                    accentColor: Theme.secondary
+                                    active: root.kbEffect === modelData.cmd
 
-                            Rectangle {
-                                height: 28
-                                width: kbEffLabel.implicitWidth + Theme.spacingM * 2
-                                radius: Theme.cornerRadius
-
-                                scale: kbEffArea.pressed ? 0.95 : 1.0
-                                Behavior on scale { NumberAnimation { duration: 100 } }
-
-                                color: root.kbEffect === modelData.cmd
-                                    ? Qt.rgba(Theme.secondary.r, Theme.secondary.g, Theme.secondary.b, 0.18)
-                                    : kbEffArea.containsMouse ? Theme.surfaceContainerHigh : Theme.surfaceContainer
-                                border.width: root.kbEffect === modelData.cmd ? 1 : 0
-                                border.color: Qt.rgba(Theme.secondary.r, Theme.secondary.g, Theme.secondary.b, 0.4)
-
-                                StyledText {
-                                    id: kbEffLabel
-                                    anchors.centerIn: parent
-                                    text: modelData.label
-                                    font.pixelSize: Theme.fontSizeSmall
-                                    color: root.kbEffect === modelData.cmd ? Theme.secondary : Theme.surfaceText
-                                }
-
-                                MouseArea {
-                                    id: kbEffArea
-                                    anchors.fill: parent
-                                    hoverEnabled: true
-                                    cursorShape: Qt.PointingHandCursor
-                                    onClicked: {
-                                        var cmd = modelData.cmd
-                                        var needsCol = modelData.needsColor
+                                    onTriggered: {
+                                        const cmd = modelData.cmd
+                                        const needsCol = modelData.needsColor
                                         root.kbEffect = cmd
                                         pluginService?.savePluginData("awcc", "kbEffect", cmd)
-                                        var args = needsCol ? [cmd, root.kbColor] : [cmd]
-                                        root.runAwcc("kbEffect", args, () => {})
+                                        root.runAwcc("kbEffect", needsCol ? [cmd, root.kbColor] : [cmd], () => {})
+                                        root.showToast("Keyboard: " + modelData.label)
                                     }
                                 }
+                            }
+                        }
 
-                                DankRipple {
-                                    anchors.fill: parent
-                                    cornerRadius: Theme.cornerRadius
-                                    rippleColor: Qt.rgba(Theme.secondary.r, Theme.secondary.g, Theme.secondary.b, 0.2)
-                                }
+                        ColorPicker {
+                            width: parent.width
+                            visible: kbSection.needsColor && root.hasLightingEffects
+                            height: (kbSection.needsColor && root.hasLightingEffects) ? 120 : 0
+                            clip: true
+
+                            Component.onCompleted: {
+                                const hsv = hexToHsv(root.kbColor)
+                                if (hsv) { hue = hsv.h; saturation = hsv.s; value = hsv.v }
+                            }
+
+                            onColorSelected: hex => {
+                                root.kbColor = hex
+                                pluginService?.savePluginData("awcc", "kbColor", hex)
+                                root.runAwcc("kbColor", [root.kbEffect, hex], () => {})
                             }
                         }
                     }
 
-                    ColorPicker {
-                        id: kbColorPicker
-                        width: parent.width
-                        visible: kbSection.needsColor && root.hasLightingEffects
-                        height: (kbSection.needsColor && root.hasLightingEffects) ? 120 : 0
-                        clip: true
+                    // Turbo
+                    SectionCard {
+                        iconName: "rocket_launch"
+                        title: "TURBO"
+                        subtitle: root.turboEnabled ? "on" : "off"
+                        accentColor: Theme.secondary
+                        visible: root.hasTurbo
 
-                        Component.onCompleted: {
-                            var hsv = hexToHsv(root.kbColor)
-                            if (hsv) { hue = hsv.h; saturation = hsv.s; value = hsv.v }
-                        }
+                        RowLayout {
+                            width: parent.width
+                            spacing: Theme.spacingM
 
-                        onColorSelected: (hex) => {
-                            root.kbColor = hex
-                            pluginService?.savePluginData("awcc", "kbColor", hex)
-                            root.runAwcc("kbColor", [root.kbEffect, hex], () => {})
+                            StyledText {
+                                text: "CPU Turbo Boost"
+                                font.pixelSize: Theme.fontSizeMedium
+                                color: Theme.surfaceText
+                                Layout.fillWidth: true
+                                Layout.alignment: Qt.AlignVCenter
+                            }
+
+                            Switch {
+                                checked: root.turboEnabled
+                                Layout.alignment: Qt.AlignVCenter
+
+                                onCheckedChanged: {
+                                    if (checked !== root.turboEnabled) {
+                                        root.turboEnabled = checked
+                                        root.runAwcc("setturbo", ["setturbo", checked ? "1" : "0"], () => {})
+                                        root.showToast("CPU Turbo " + (checked ? "on" : "off"))
+                                    }
+                                }
+                            }
                         }
                     }
                 }
 
-                // ── TURBO ─────────────────────────────────────────────────────
-
+                // Toast, for the discrete changes that actually hit the hardware
                 Rectangle {
-                    width: parent.width; height: 1
-                    color: Theme.outline; opacity: 0.3
-                    visible: root.hasTurbo && (root.hasBrightness || root.hasLightingEffects)
-                }
+                    anchors.horizontalCenter: parent.horizontalCenter
+                    anchors.bottom: parent.bottom
+                    anchors.bottomMargin: Theme.spacingS
+                    height: 32
+                    width: toastLayout.implicitWidth + Theme.spacingM * 2
+                    radius: height / 2
+                    color: Qt.rgba(Theme.surfaceContainerHighest.r, Theme.surfaceContainerHighest.g, Theme.surfaceContainerHighest.b, 0.95)
+                    border.width: 1
+                    border.color: Qt.rgba(Theme.primary.r, Theme.primary.g, Theme.primary.b, 0.4)
+                    z: 999
+                    opacity: toastTimer.running ? 1.0 : 0.0
+                    scale: toastTimer.running ? 1.0 : 0.75
 
-                Column {
-                    width: parent.width
-                    spacing: Theme.spacingS
-                    visible: root.hasTurbo
+                    Behavior on opacity { NumberAnimation { duration: 200 } }
+                    Behavior on scale { NumberAnimation { duration: 200; easing.type: Easing.OutBack } }
 
-                    Row {
-                        spacing: Theme.spacingS
-                        Rectangle { width: 4; height: 20; radius: 2; color: Theme.secondary; anchors.verticalCenter: parent.verticalCenter }
-                        DankIcon { name: "rocket_launch"; size: 16; color: Theme.secondary; anchors.verticalCenter: parent.verticalCenter }
+                    RowLayout {
+                        id: toastLayout
+                        anchors.centerIn: parent
+                        spacing: Theme.spacingXS
+
+                        DankIcon { name: "info"; size: 16; color: Theme.primary }
+
                         StyledText {
-                            text: "TURBO"
+                            text: root.toastText
                             font.pixelSize: Theme.fontSizeSmall
                             font.weight: Font.Bold
                             color: Theme.surfaceText
-                            anchors.verticalCenter: parent.verticalCenter
-                        }
-                    }
-
-                    Row {
-                        width: parent.width
-
-                        StyledText {
-                            text: "CPU Turbo Boost"
-                            font.pixelSize: Theme.fontSizeMedium
-                            color: Theme.surfaceText
-                            anchors.verticalCenter: parent.verticalCenter
-                            width: parent.width - turboSwitch.width
-                        }
-
-                        Switch {
-                            id: turboSwitch
-                            checked: root.turboEnabled
-                            anchors.verticalCenter: parent.verticalCenter
-
-                            onCheckedChanged: {
-                                if (checked !== root.turboEnabled) {
-                                    root.turboEnabled = checked
-                                    root.runAwcc("setturbo", ["setturbo", checked ? "1" : "0"], () => {})
-                                }
-                            }
                         }
                     }
                 }
-
-                // Bottom padding
-                Item { width: parent.width; height: Theme.spacingM }
             }
         }
     }
 
     popoutWidth: 420
-    popoutHeight: 640
+    popoutHeight: 0
 }
