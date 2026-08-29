@@ -462,9 +462,13 @@ PluginComponent {
         }
 
         Rectangle {
-            height: 18
-            width: Math.max(42, sliderVal.implicitWidth + Theme.spacingS * 2)
-            radius: 9
+            // Implicit, not explicit: QtQuick.Layouts ignores width/height on
+            // its children and sizes them from the implicit hints, so an
+            // explicit width collapses this to zero inside the RowLayout and
+            // the value spills out of the pill.
+            implicitHeight: 18
+            implicitWidth: Math.max(42, sliderVal.implicitWidth + Theme.spacingS * 2)
+            radius: height / 2
             color: Qt.rgba(ls.accentColor.r, ls.accentColor.g, ls.accentColor.b, 0.12)
             Layout.alignment: Qt.AlignVCenter
 
