@@ -2,7 +2,7 @@
     "id": "awcc",
     "name": "Alienware Command Center",
     "description": "Control thermal modes, fan boost, keyboard lighting, light bar and turbo via awcc CLI",
-    "version": "2.1.0",
+    "version": "2.1.1",
     "author": "Lucas Mariani",
     "type": "widget",
     "capabilities": [
