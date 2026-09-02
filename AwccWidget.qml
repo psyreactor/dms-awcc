@@ -20,10 +20,16 @@ PluginComponent {
     // completion time, so instances sharing an id clobber each other's callback.
     // The id has to stay stable, though: the 500ms debounce below is what
     // collapses the burst of commands a slider drag produces, and a fresh id per
-    // call would defeat it. Keying on the screen gives isolation per instance
-    // and a bounded set of entries, where a random namespace leaked a new entry
-    // and Timer into the Proc singleton on every reload.
-    readonly property string commandNamespace: "awcc." + (root.parentScreen ? root.parentScreen.name : "default")
+    // call would defeat it.
+    //
+    // Screen alone is not enough to tell instances apart — two bars on one
+    // monitor would share it — so the bar config is part of the key too. Both
+    // are stable for the life of an instance, which keeps the set of entries in
+    // the Proc singleton bounded, where a random namespace leaked a new entry
+    // and Timer on every reload.
+    readonly property string commandNamespace: "awcc."
+        + (root.parentScreen ? root.parentScreen.name : "default") + "."
+        + (root.barConfig ? root.barConfig.id : "default")
 
     // State
     property string currentMode: "..."
