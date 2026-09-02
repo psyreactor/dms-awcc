@@ -90,8 +90,15 @@ PluginComponent {
         toastTimer.restart()
     }
 
+    // Every awcc call funnels through here, so the teardown guard lives here
+    // too: reloading the plugin destroys this instance while commands are still
+    // in flight, and their callbacks would then dereference a null root.
     function runAwcc(id, args, callback) {
-        Proc.runCommand(root.commandNamespace + "." + id, [root.awccBinary].concat(args), callback, 500)
+        Proc.runCommand(root.commandNamespace + "." + id, [root.awccBinary].concat(args), (stdout, exitCode) => {
+            if (!root)
+                return
+            callback(stdout, exitCode)
+        }, 500)
     }
 
     function parseDeviceInfo() {
