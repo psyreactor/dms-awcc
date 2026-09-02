@@ -78,3 +78,9 @@ thermal mode in sync, and issues `awcc <command>` for each control you touch.
 
 Slider drags are debounced, so dragging from 40 to 70 sends a single command on
 release rather than one per value.
+
+Each widget instance owns its commands, keyed by screen and bar, so the widget
+placed on more than one bar or monitor drives the hardware from each instance
+without the two sharing a result. Work still in flight when a bar is
+reconfigured or the plugin is reloaded is discarded rather than applied to a
+torn-down widget.
