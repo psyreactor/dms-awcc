@@ -32,7 +32,6 @@ PluginComponent {
     property int gpuBoost: 0
     property bool turboEnabled: false
     property int kbBrightness: pluginData.kbBrightness !== undefined ? pluginData.kbBrightness : 50
-    property int lbBrightness: pluginData.lbBrightness !== undefined ? pluginData.lbBrightness : 50
     property string kbEffect: pluginData.kbEffect || "spectrum"
     property string kbColor: pluginData.kbColor || "ff0000"
 
@@ -46,7 +45,6 @@ PluginComponent {
     property bool hasFanBoost:        supportedFeatures.length === 0 || supportedFeatures.indexOf("Fan Boost")        >= 0
     property bool hasBrightness:      supportedFeatures.length === 0 || supportedFeatures.indexOf("Brightness Control") >= 0
     property bool hasLightingEffects: supportedLightingModes.length > 0
-    property bool hasLightBar:        false  // not listed in device-info
     property bool hasTurbo:           supportedFeatures.indexOf("CPU Turbo") >= 0
 
     // All known thermal modes with their device-info names
